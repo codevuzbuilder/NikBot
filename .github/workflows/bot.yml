@@ -1,0 +1,56 @@
+name: Nik Bot 24/7
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # har 30 daqiqada tekshiradi; ishlamayotgan bo'lsa qayta ishga tushiradi
+  workflow_dispatch:
+
+concurrency:
+  group: nik-bot            # bir vaqtda faqat bitta bot ishlaydi
+  cancel-in-progress: false # yangisi navbatda kutadi, ishlayotganini to'xtatmaydi
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+      ADMIN_ID: ${{ secrets.ADMIN_ID }}
+      KEY: ${{ secrets.DATA_KEY || secrets.BOT_TOKEN }}
+      DB_PATH: work/bot.db
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Ma'lumotlarni tiklash (data branch)
+        run: |
+          mkdir -p work
+          git config --global user.name "nikbot"
+          git config --global user.email "nikbot@users.noreply.github.com"
+          REMOTE="https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          if git ls-remote --exit-code --heads "$REMOTE" data >/dev/null 2>&1; then
+            git clone -q --branch data --single-branch "$REMOTE" storage
+          else
+            mkdir storage && cd storage && git init -q -b data && git remote add origin "$REMOTE" && cd ..
+          fi
+          if [ -f storage/bot.db.enc ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:KEY -in storage/bot.db.enc -out work/bot.db
+          fi
+
+      - name: Botni ishga tushirish
+        run: |
+          ( while true; do sleep 300; ./save.sh; done ) &
+          timeout 340m bash -c 'while true; do python -m bot.main; sleep 5; done' || true
+
+      - name: Ma'lumotlarni saqlash
+        if: always()
+        run: ./save.sh
